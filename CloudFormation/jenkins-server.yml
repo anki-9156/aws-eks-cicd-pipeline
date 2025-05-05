@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template for Jenkins server'
+
+Parameters:
+  EnvironmentName:
+    Description: Environment name that will be prefixed to resource names
+    Type: String
+    Default: dev
+
+  JenkinsInstanceType:
+    Description: EC2 instance type for Jenkins
+    Type: String
+    Default: t3.medium
+
+  KeyName:
+    Description: EC2 Key Pair for SSH access
+    Type: AWS::EC2::KeyPair::KeyName
+
+  JenkinsAMI:
+    Description: Amazon Machine Image ID for Jenkins (Amazon Linux 2)
+    Type: AWS::EC2::Image::Id
+    Default: ami-0c55b159cbfafe1f0  # This is a placeholder. Use the latest Amazon Linux 2 AMI for your region
+
+Resources:
+  # Jenkins Security Group
+  JenkinsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Jenkins server
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvironmentName}-VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-jenkins-sg
+
+  # Jenkins EC2 Instance
+  JenkinsInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref JenkinsInstanceType
+      SecurityGroupIds:
+        - !Ref JenkinsSecurityGroup
+      KeyName: !Ref KeyName
+      ImageId: !Ref JenkinsAMI
+      SubnetId:
+        Fn::ImportValue: !Sub ${EnvironmentName}-PublicSubnet1
+      IamInstanceProfile: 
+        Fn::ImportValue: !Sub ${EnvironmentName}-JenkinsInstanceProfileArn
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp3
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          # Update system packages
+          yum update -y
+          amazon-linux-extras install docker -y
+          systemctl start docker
+          systemctl enable docker
+          usermod -a -G docker ec2-user
+
+          # Install Java
+          amazon-linux-extras install java-openjdk11 -y
+
+          # Install Jenkins
+          wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat-stable/jenkins.repo
+          rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
+          yum install jenkins -y
+          systemctl start jenkins
+          systemctl enable jenkins
+
+          # Install AWS CLI
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          ./aws/install
+
+          # Install kubectl
+          curl -o kubectl https://amazon-eks.s3.us-west-2.amazonaws.com/1.28.0/2023-09-14/bin/linux/amd64/kubectl
+          chmod +x ./kubectl
+          mv ./kubectl /usr/local/bin
+
+          # Install eksctl
+          curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
+          mv /tmp/eksctl /usr/local/bin
+
+          # Install git
+          yum install git -y
+
+          # Install docker-compose
+          curl -L "https://github.com/docker/compose/releases/download/v2.23.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          chmod +x /usr/local/bin/docker-compose
+
+          # Configure Jenkins user to use docker
+          usermod -a -G docker jenkins
+          systemctl restart jenkins
+
+          # Get Jenkins initial admin password for the logs
+          echo "Jenkins initial admin password: $(cat /var/lib/jenkins/secrets/initialAdminPassword)" >> /var/log/user-data.log
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-jenkins-server
+
+  # Jenkins Elastic IP
+  JenkinsEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  JenkinsEIPAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt JenkinsEIP.AllocationId
+      InstanceId: !Ref JenkinsInstance
+
+Outputs:
+  JenkinsInstanceId:
+    Description: Jenkins EC2 Instance ID
+    Value: !Ref JenkinsInstance
+    Export:
+      Name: !Sub ${EnvironmentName}-JenkinsInstanceId
+
+  JenkinsPublicIP:
+    Description: Jenkins Public IP Address
+    Value: !Ref JenkinsEIP
+    Export:
+      Name: !Sub ${EnvironmentName}-JenkinsPublicIP
+
+  JenkinsURL:
+    Description: Jenkins URL
+    Value: !Sub http://${JenkinsEIP}:8080
+    Export:
+      Name: !Sub ${EnvironmentName}-JenkinsURL

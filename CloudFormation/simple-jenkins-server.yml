@@ -1,0 +1,88 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Simple Jenkins Server'
+
+Parameters:
+  EnvironmentName:
+    Description: Environment name
+    Type: String
+    Default: dev
+    
+  KeyName:
+    Description: Name of an existing EC2 KeyPair
+    Type: AWS::EC2::KeyPair::KeyName
+    
+  InstanceType:
+    Description: EC2 instance type
+    Type: String
+    Default: t2.micro
+
+Resources:
+  JenkinsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Jenkins server
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvironmentName}-VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-jenkins-sg
+
+  JenkinsInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      SecurityGroupIds:
+        - !Ref JenkinsSecurityGroup
+      KeyName: !Ref KeyName
+      ImageId: ami-0aa7d40eeae50c9a9  # Amazon Linux 2 in us-east-1
+      SubnetId:
+        Fn::ImportValue: !Sub ${EnvironmentName}-PublicSubnet1
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          yum update -y
+          amazon-linux-extras install docker -y
+          systemctl start docker
+          systemctl enable docker
+          yum install -y java-1.8.0-openjdk
+          wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat-stable/jenkins.repo
+          rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
+          yum install -y jenkins
+          systemctl start jenkins
+          systemctl enable jenkins
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-jenkins-server
+
+  JenkinsEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      
+  JenkinsEIPAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt JenkinsEIP.AllocationId
+      InstanceId: !Ref JenkinsInstance
+
+Outputs:
+  JenkinsInstanceId:
+    Description: Jenkins EC2 Instance ID
+    Value: !Ref JenkinsInstance
+    
+  JenkinsPublicIP:
+    Description: Jenkins Public IP
+    Value: !Ref JenkinsEIP
+    
+  JenkinsURL:
+    Description: Jenkins URL
+    Value: !Sub http://${JenkinsEIP}:8080

@@ -1,0 +1,24 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Basic Jenkins IAM Role'
+
+Resources:
+  # Basic Jenkins IAM Role
+  BasicJenkinsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: basic-jenkins-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+
+Outputs:
+  BasicJenkinsRoleArn:
+    Description: Basic Jenkins IAM Role ARN
+    Value: !GetAtt BasicJenkinsRole.Arn

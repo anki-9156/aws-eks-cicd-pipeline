@@ -1,0 +1,41 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Jenkins IAM Role with Basic Policy'
+
+Resources:
+  # Jenkins IAM Role
+  JenkinsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: jenkins-role-with-policy
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+
+  # Jenkins IAM Policy
+  JenkinsIAMPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: jenkins-basic-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - cloudformation:*
+              - ec2:*
+              - s3:*
+            Resource: '*'
+      Roles:
+        - !Ref JenkinsRole
+
+Outputs:
+  JenkinsRoleArn:
+    Description: Jenkins IAM Role ARN
+    Value: !GetAtt JenkinsRole.Arn

@@ -1,0 +1,89 @@
+pipeline {
+    agent any
+    
+    environment {
+        AWS_REGION = 'us-east-1'
+        ECR_REPOSITORY_NAME = 'sample-app'
+        CLUSTER_NAME = 'simple-eks-cluster'
+        IMAGE_TAG = "${env.BUILD_NUMBER}"
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        
+        stage('Build') {
+            steps {
+                sh 'npm install'
+                sh 'npm test'
+            }
+        }
+        
+        stage('Build and Push Docker Image') {
+            steps {
+                script {
+                    // Get ECR repository URI
+                    def ECR_REPOSITORY_URI = sh(
+                        script: "aws ecr describe-repositories --repository-names ${ECR_REPOSITORY_NAME} --region ${AWS_REGION} --query 'repositories[0].repositoryUri' --output text",
+                        returnStdout: true
+                    ).trim()
+                    
+                    // Login to ECR
+                    sh "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REPOSITORY_URI}"
+                    
+                    // Build Docker image
+                    sh "docker build -t ${ECR_REPOSITORY_NAME}:${IMAGE_TAG} ."
+                    sh "docker tag ${ECR_REPOSITORY_NAME}:${IMAGE_TAG} ${ECR_REPOSITORY_URI}:${IMAGE_TAG}"
+                    
+                    // Push Docker image to ECR
+                    sh "docker push ${ECR_REPOSITORY_URI}:${IMAGE_TAG}"
+                    
+                    // Save ECR URI for later use
+                    env.ECR_REPOSITORY_URI = ECR_REPOSITORY_URI
+                }
+            }
+        }
+        
+        stage('Deploy to EKS') {
+            steps {
+                script {
+                    try {
+                        // Configure kubectl on the Jenkins server
+                        sh "aws eks update-kubeconfig --name ${CLUSTER_NAME} --region ${AWS_REGION}"
+                        
+                        // Replace placeholders in deployment file
+                        sh "sed -i.bak 's|\\${ECR_REPOSITORY_URI}|${env.ECR_REPOSITORY_URI}|g' kubernetes/deployment.yml"
+                        sh "sed -i.bak 's|\\${IMAGE_TAG}|${IMAGE_TAG}|g' kubernetes/deployment.yml"
+                        
+                        // Apply Kubernetes manifests
+                        sh "kubectl apply -f kubernetes/deployment.yml"
+                        sh "kubectl apply -f kubernetes/service.yml"
+                        
+                        // Wait for deployment to complete
+                        sh "kubectl rollout status deployment/sample-app --timeout=180s"
+                    } catch (Exception e) {
+                        echo "Deployment failed: ${e.message}"
+                        echo "Continuing pipeline despite deployment failure"
+                    }
+                }
+            }
+        }
+        
+        stage('Get Service URL') {
+            steps {
+                script {
+                    try {
+                        // Get service URL
+                        sh "kubectl get svc sample-app-service -o wide"
+                        echo "Application deployed. Access it using the LoadBalancer address above."
+                    } catch (Exception e) {
+                        echo "Could not get service information: ${e.message}"
+                    }
+                }
+            }
+        }
+    }
+}

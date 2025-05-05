@@ -1,0 +1,174 @@
+pipeline {
+    agent any
+    
+    environment {
+        AWS_REGION = 'us-east-1'
+        ECR_REPOSITORY_NAME = 'sample-app'
+        CLUSTER_NAME = 'dev-eks-cluster'
+        DOCKER_IMAGE_NAME = 'sample-app'
+        DEPLOYMENT_NAME = 'sample-app'
+        NAMESPACE = 'default'
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        
+        stage('Build') {
+            steps {
+                sh 'npm install'
+                sh 'npm run test'
+                sh 'npm run build'
+            }
+        }
+        
+        stage('Build and Push Docker Image') {
+            steps {
+                script {
+                    // Authenticate with AWS ECR
+                    sh """
+                    aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin \
+                    \$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${AWS_REGION}.amazonaws.com
+                    """
+                    
+                    // Check if ECR repository exists, if not create it
+                    sh """
+                    aws ecr describe-repositories --repository-names ${ECR_REPOSITORY_NAME} --region ${AWS_REGION} || \
+                    aws ecr create-repository --repository-name ${ECR_REPOSITORY_NAME} --region ${AWS_REGION}
+                    """
+                    
+                    // Get ECR repository URI
+                    def ECR_REPOSITORY_URI = sh(
+                        script: "aws ecr describe-repositories --repository-names ${ECR_REPOSITORY_NAME} --region ${AWS_REGION} --query 'repositories[0].repositoryUri' --output text",
+                        returnStdout: true
+                    ).trim()
+                    
+                    // Build and tag Docker image
+                    def IMAGE_TAG = "${env.BUILD_NUMBER}"
+                    sh "docker build -t ${DOCKER_IMAGE_NAME}:${IMAGE_TAG} ."
+                    sh "docker tag ${DOCKER_IMAGE_NAME}:${IMAGE_TAG} ${ECR_REPOSITORY_URI}:${IMAGE_TAG}"
+                    sh "docker tag ${DOCKER_IMAGE_NAME}:${IMAGE_TAG} ${ECR_REPOSITORY_URI}:latest"
+                    
+                    // Push Docker image to ECR
+                    sh "docker push ${ECR_REPOSITORY_URI}:${IMAGE_TAG}"
+                    sh "docker push ${ECR_REPOSITORY_URI}:latest"
+                    
+                    // Save ECR URI and image tag for later use
+                    env.ECR_REPOSITORY_URI = ECR_REPOSITORY_URI
+                    env.IMAGE_TAG = IMAGE_TAG
+                }
+            }
+        }
+        
+        stage('Deploy CloudFormation Infrastructure') {
+            steps {
+                script {
+                    // Deploy VPC and networking resources
+                    sh """
+                    aws cloudformation deploy \\
+                      --template-file vpc-network.yml \\
+                      --stack-name ${env.CLUSTER_NAME}-network \\
+                      --parameter-overrides EnvironmentName=dev \\
+                      --capabilities CAPABILITY_IAM \\
+                      --region ${AWS_REGION}
+                    """
+                    
+                    // Deploy IAM roles required for EKS
+                    sh """
+                    aws cloudformation deploy \\
+                      --template-file iam-roles.yml \\
+                      --stack-name ${env.CLUSTER_NAME}-iam \\
+                      --parameter-overrides EnvironmentName=dev \\
+                      --capabilities CAPABILITY_NAMED_IAM \\
+                      --region ${AWS_REGION}
+                    """
+                    
+                    // Deploy EKS cluster and node groups
+                    sh """
+                    aws cloudformation deploy \\
+                      --template-file eks-cluster.yml \\
+                      --stack-name ${env.CLUSTER_NAME} \\
+                      --parameter-overrides \\
+                        EnvironmentName=dev \\
+                        ClusterName=${env.CLUSTER_NAME} \\
+                      --capabilities CAPABILITY_IAM \\
+                      --region ${AWS_REGION}
+                    """
+                }
+            }
+        }
+        
+        stage('Configure kubectl') {
+            steps {
+                script {
+                    // Update kubeconfig to connect to the EKS cluster
+                    sh "aws eks update-kubeconfig --name ${env.CLUSTER_NAME} --region ${AWS_REGION}"
+                    
+                    // Verify connection to cluster
+                    sh "kubectl get nodes"
+                    
+                    // Create ECR registry secret for Kubernetes
+                    sh """
+                    kubectl create secret docker-registry aws-ecr-secret \\
+                      --docker-server=\$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${AWS_REGION}.amazonaws.com \\
+                      --docker-username=AWS \\
+                      --docker-password=\$(aws ecr get-login-password --region ${AWS_REGION}) \\
+                      --namespace=${NAMESPACE} || true
+                    """
+                }
+            }
+        }
+        
+        stage('Deploy to Kubernetes') {
+            steps {
+                script {
+                    // Replace placeholders in Kubernetes deployment manifest
+                    sh """
+                    sed -i 's|\${ECR_REPOSITORY_URI}|${env.ECR_REPOSITORY_URI}|g' deployment.yml
+                    sed -i 's|\${IMAGE_TAG}|${env.IMAGE_TAG}|g' deployment.yml
+                    """
+                    
+                    // Apply Kubernetes manifests
+                    sh "kubectl apply -f deployment.yml"
+                    sh "kubectl apply -f service.yml"
+                    
+                    // Wait for deployment to complete
+                    sh "kubectl rollout status deployment/${DEPLOYMENT_NAME} --timeout=300s"
+                }
+            }
+        }
+        
+        stage('Verify Deployment') {
+            steps {
+                script {
+                    // Get service URL
+                    def SERVICE_URL = sh(
+                        script: "kubectl get service ${DEPLOYMENT_NAME}-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'",
+                        returnStdout: true
+                    ).trim()
+                    
+                    echo "Application deployed successfully! Access it at: http://${SERVICE_URL}"
+                    
+                    // Verify application is running
+                    sh "kubectl get pods -l app=${DEPLOYMENT_NAME}"
+                    sh "kubectl get svc ${DEPLOYMENT_NAME}-service"
+                }
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo "CI/CD pipeline completed successfully!"
+        }
+        failure {
+            echo "CI/CD pipeline failed!"
+        }
+        always {
+            // Clean up Docker images to save space
+            sh "docker system prune -f"
+        }
+    }

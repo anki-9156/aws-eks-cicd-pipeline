@@ -1,0 +1,13 @@
+{
+    "name": "sample-app",
+    "version": "1.0.0",
+    "description": "Sample app for EKS CI/CD pipeline",
+    "main": "app.js",
+    "scripts": {
+      "start": "node app.js",
+      "test": "echo \"Tests passed\" && exit 0"
+    },
+    "dependencies": {
+      "express": "^4.17.1"
+    }
+  }

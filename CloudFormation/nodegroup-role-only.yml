@@ -1,0 +1,38 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'EKS Node Group Role only'
+
+Parameters:
+  EnvironmentName:
+    Description: Environment name that will be prefixed to resource names
+    Type: String
+    Default: dev
+
+Resources:
+  # EKS Node Group Role with a unique name
+  EksNodeGroupRoleOnly:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-nodegroup-role-test
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-nodegroup-role-test
+
+Outputs:
+  EksNodeGroupRoleArn:
+    Description: EKS Node Group IAM Role ARN
+    Value: !GetAtt EksNodeGroupRoleOnly.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-NodegroupRoleArn

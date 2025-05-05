@@ -1,0 +1,72 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Jenkins IAM Role for CI/CD'
+
+Parameters:
+  EnvironmentName:
+    Description: Environment name that will be prefixed to resource names
+    Type: String
+    Default: dev
+
+Resources:
+  # Jenkins IAM Role
+  JenkinsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-jenkins-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonECR-FullAccess
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-jenkins-role
+
+  # Jenkins Instance Profile
+  JenkinsInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:jenkins:
+        - !Ref JenkinsRole
+
+  # Jenkins IAM Policy
+  JenkinsIAMPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-jenkins-iam-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - cloudformation:*
+              - eks:*
+              - ec2:*
+              - elasticloadbalancing:*
+              - autoscaling:*
+              - iam:PassRole
+              - s3:*
+            Resource: '*'
+      Roles:
+        - !Ref JenkinsRole
+
+Outputs:
+  JenkinsRoleArn:
+    Description: Jenkins IAM Role ARN
+    Value: !GetAtt JenkinsRole.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-JenkinsRoleArn
+
+  JenkinsInstanceProfileArn:
+    Description: Jenkins Instance Profile ARN
+    Value: !GetAtt JenkinsInstanceProfile.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-JenkinsInstanceProfileArn

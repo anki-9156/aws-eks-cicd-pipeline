@@ -1,0 +1,79 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'EKS Node Group'
+
+Parameters:
+  EnvironmentName:
+    Description: Environment name
+    Type: String
+    Default: dev
+  
+  ClusterName:
+    Description: Name of the EKS cluster
+    Type: String
+    Default: simple-eks-cluster
+  
+  NodeGroupName:
+    Description: Name of the EKS node group
+    Type: String
+    Default: standard-nodes
+  
+  InstanceType:
+    Description: EC2 instance type for worker nodes
+    Type: String
+    Default: t3.medium
+  
+  DesiredCapacity:
+    Description: Desired number of worker nodes
+    Type: Number
+    Default: 2
+  
+  MinSize:
+    Description: Minimum number of worker nodes
+    Type: Number
+    Default: 1
+  
+  MaxSize:
+    Description: Maximum number of worker nodes
+    Type: Number
+    Default: 4
+
+Resources:
+  NodeInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+
+  EksNodegroup:
+    Type: AWS::EKS::Nodegroup
+    Properties:
+      ClusterName: !Ref ClusterName
+      NodegroupName: !Ref NodeGroupName
+      NodeRole: !GetAtt NodeInstanceRole.Arn
+      ScalingConfig:
+        MinSize: !Ref MinSize
+        DesiredSize: !Ref DesiredCapacity
+        MaxSize: !Ref MaxSize
+      InstanceTypes:
+        - !Ref InstanceType
+      SubnetIds:
+        - Fn::ImportValue: !Sub ${EnvironmentName}-PrivateSubnet1
+        - Fn::ImportValue: !Sub ${EnvironmentName}-PrivateSubnet2
+      Tags:
+        Name: !Sub ${EnvironmentName}-${ClusterName}-node
+
+Outputs:
+  NodeGroupName:
+    Description: Name of the EKS Node Group
+    Value: !Ref EksNodegroup
